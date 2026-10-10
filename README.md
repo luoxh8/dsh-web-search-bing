@@ -24,46 +24,57 @@ server-side retrieval"*——**每次 `web_search` 都是一次独立的、直�
 hy3 / hy4-preview、GLM、Kimi…）**毫无关系**。
 
 结果就是：把聊天模型全换成 WorkBuddy 之后，只要模型触发一次联网搜索，你的
-DeepSeek 额度照样被扣。这个插件把搜索后端换成 Bing 的公开 RSS 接口，从而把
-这条路径彻底切断。
+DeepSeek 额度照样被扣。这个插件把搜索后端换成 Bing 的公开接口，从而把这条路径
+彻底切断。
 
 ## 它怎么工作
 
 | seam 契约 | 实现 |
 |---|---|
 | `id` | `bing` |
-| `available()` | 本地检查（URL 合法、超时为正），**不看任何凭据** |
-| `search({query,maxResults})` | 请求 `https://www.bing.com/search?q=…&format=rss`，解析 `<item>` → `{sources:[{url,title,snippet,publishedAt}],truncated:false}` |
+| `available()` | 本地检查（至少一个候选 URL 合法、超时为正），**不看任何凭据** |
+| `search({query,maxResults})` | 依次尝试候选主机 × 传输方式，返回 `{sources:[{url,title,snippet,publishedAt}],truncated:false}` |
 
-- 主通道是 Bing 的 RSS 输出（免 API key、免登录、国内可直连；实测 ~0.8s / 10 条）。
-- RSS 返回 0 条或失败时，回退抓同一端点的 HTML 结果页（解析 `li.b_algo`）。
-- 只发 `GET`，不做重定向外的任何改写，`AbortSignal` 全程透传，内部超时兜底 20s。
-- 无第三方依赖、无宿主包硬依赖（`@deepseek-ai/dsh-web` 仅用于错误类型，取不到就退回带 `code` 的原生 `Error`）。
+尝试顺序（第一个产出非空结果的就返回）：
+
+1. `baseURL`（默认 `https://www.bing.com/search`）+ `format=rss` —— 免 API key、免登录、国内可直连，实测 ~0.8s / 10 条
+2. 同一主机的 HTML 结果页（解析 `li.b_algo`）
+3. `fallbackBaseURL`（默认 `https://cn.bing.com/search`）+ RSS
+4. 备用主机的 HTML 结果页
+
+其他行为：
+
+- 只发 `GET`，不改写重定向，`AbortSignal` 全程透传，内部超时兜底 20s。
+- **返回空结果的响应被视为"这次尝试失败"**，而不是"没有结果"——Bing 被限流时会回
+  一个格式正确但没有 `<item>` 的文档，把它当答案会把故障藏起来。
+- 全部尝试都失败时抛带 `code` 的 `WebError`（`WEB_PROVIDER_ERROR`，取消是 `WEB_ABORTED`）。
+- 无第三方依赖；`@deepseek-ai/dsh-web` 只用来取 `WebError` 类，取不到就退回带 `code` 的原生 `Error`。
 
 ## 安装
 
-```powershell
-# 1) 把包挂进 DSH profile 的 node_modules（幂等）
-.\install.ps1
+**依赖声明（推荐，一次做完）**：在 DSH profile 的 `package.json` 里加一行
+（`%APPDATA%\dsh-desktop\harness\profiles\web\package.json`）：
 
-# 2) profile 的 cordis.patch.yml 里插入 provider 行并把 web 指过去
-#    见下方“配置”一节
+```json
+"dependencies": {
+  "dsh-web-search-bing": "link:D:/codex_proj/dev/projects/dsh-web-search-bing"
+}
 ```
 
-`install.ps1` 之所以必要：DSH profile 用 pnpm，`node_modules` 里没被
-`package.json` 依赖声明的条目会在任何一次 `pnpm install`（插件市场装/升/删插件
-时都会跑）后被清掉。那时重跑一次脚本即可。
+这样 pnpm 在 profile 里做任何 install 都会保留它；包通过 `node_modules` 里的链接解析到本仓库。
 
-## 配置
+**兜底（`install.ps1`）**：如果那一行被插件市场重写掉了、或者链接被删了，
+`.\install.ps1` 用目录联接（junction）直接把本目录挂回 profile 的 `node_modules`，幂等可重跑。
 
-在 `%APPDATA%\dsh-desktop\harness\profiles\web\cordis.patch.yml` 里加：
+**然后**在 profile 的 `cordis.patch.yml` 里注册 provider 并指向它：
 
 ```yaml
 - insert:
     - id: web-search-bing
       name: dsh-web-search-bing
       config:
-        baseURL: https://www.bing.com/search   # 可换 https://cn.bing.com/search
+        baseURL: https://www.bing.com/search
+        fallbackBaseURL: https://cn.bing.com/search
         market: zh-CN
         count: 10
         timeoutMs: 20000
@@ -74,12 +85,23 @@ DeepSeek 额度照样被扣。这个插件把搜索后端换成 Bing 的公开 R
     fetchProvider: http        # 覆盖会替换整个 config，必须一并写出
 ```
 
-改完由 profile HMR 热应用，无需重启（若未生效则重启 DSH Desktop）。
+改完由 profile HMR 热应用（若未生效则重启 DSH Desktop）。
+
+## 配置项
+
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `baseURL` | `https://www.bing.com/search` | 首选搜索端点 |
+| `fallbackBaseURL` | `https://cn.bing.com/search` | 备用主机；设成空串可关掉回退 |
+| `market` | `zh-CN` | 传给 Bing 的 `mkt` |
+| `count` | `10` | 请求条数（会被 `maxResults` 抬高，上限 50） |
+| `timeoutMs` | `20000` | 单次请求超时 |
+| `userAgent` | Chrome/Win64 UA | 请求头 |
 
 ## 验证
 
 ```powershell
-# 离线 + 真打 Bing 的契约测试（15 项）
+# 18 项：真打 Bing + 回退链路 + 两个解析器的离线用例
 node test\search.test.mjs
 ```
 
@@ -96,10 +118,9 @@ node test\search.test.mjs
 ## 已知限制
 
 - 依赖 Bing 私有端点（RSS 与结果页 HTML），上游改版可能使其失效；失效时报
-  `WEB_PROVIDER_ERROR`，**不会**回退到 DeepSeek。
+  `WEB_PROVIDER_ERROR`，**不会**回退到 DeepSeek——这是刻意的，宁可搜索失败也不偷偷计费。
 - Bing RSS 结果质量弱于专用搜索 API（长查询匹配差、约 10 条上限）。
-- 无搜索深度、时间范围、站点过滤等参数——seam 的请求类型本身只有
-  `query` 与 `maxResults`。
+- 无搜索深度、时间范围、站点过滤等参数——seam 的请求类型本身只有 `query` 与 `maxResults`。
 
 ## 许可
 

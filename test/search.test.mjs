@@ -45,6 +45,27 @@ const empty = await provider.search({ query: '   ' }).then(
 );
 check('blank query is rejected with a seam code', empty === 'WEB_PROVIDER_ERROR', String(empty));
 
+/** Fallback behaviour: an unreachable primary host must not end the search. */
+const fallbackProvider = mount({
+  baseURL: 'https://bing.invalid.example/search',
+  fallbackBaseURL: 'https://cn.bing.com/search',
+  market: 'zh-CN',
+  count: 5,
+  timeoutMs: 10000,
+});
+check('fallback host keeps the provider available', fallbackProvider.available() === true);
+const viaFallback = await fallbackProvider.search({ query: 'deepseek harness' });
+check('unreachable primary falls through to the fallback host', viaFallback.sources.length > 0, `${viaFallback.sources.length} sources`);
+
+/** A provider with no usable host at all reports unavailability locally. */
+const hostless = mount({ baseURL: 'not a url', fallbackBaseURL: '' });
+check('no usable endpoint means unavailable', hostless.available() === false);
+const hostlessResult = await hostless.search({ query: 'x' }).then(
+  () => 'resolved',
+  (error) => error.code ?? error.name,
+);
+check('no usable endpoint fails with a seam code', hostlessResult === 'WEB_PROVIDER_ERROR', String(hostlessResult));
+
 const rss = parseRss(
   '<rss><channel><item><title>A &amp; B</title><link>https://example.com/a?x=1&amp;y=2</link>' +
     '<description><![CDATA[<b>hi</b> there]]></description><pubDate>Fri, 10 Oct 2026 00:00:00 GMT</pubDate></item>' +
@@ -64,17 +85,17 @@ check('html parser keeps snippets optional', html[1]?.snippet === undefined);
 
 const failing = new BingSearchProvider(() => ({
   baseURL: 'https://bing.invalid.example/search',
+  fallbackBaseURL: 'https://bing.invalid.example/search',
   market: 'zh-CN',
   count: 5,
   timeoutMs: 8000,
   userAgent: 'test',
 }));
-check('unreachable endpoint is reported as available config', failing.available() === true);
 const failure = await failing.search({ query: 'x' }).then(
   () => 'resolved',
   (error) => error.code ?? error.name,
 );
-check('unreachable endpoint fails with a seam code', failure === 'WEB_PROVIDER_ERROR', String(failure));
+check('all hosts unreachable fails with a seam code', failure === 'WEB_PROVIDER_ERROR', String(failure));
 
 console.log(failures === 0 ? '\nRESULT: PASS' : `\nRESULT: FAIL (${failures})`);
 process.exit(failures === 0 ? 0 : 1);
