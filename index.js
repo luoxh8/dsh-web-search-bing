@@ -2,10 +2,13 @@
  * Bing search provider for the DeepSeek Harness web capability seam (`ctx.web`).
  *
  * Registers a keyless search provider backed by Bing's public RSS endpoint,
- * with an HTML scrape of the same endpoint as a fallback and a second Bing host
- * (`cn.bing.com`) as a last resort. No API key, no account, and no DeepSeek
- * credential is ever consulted, so a conversation that selects this provider
- * can never spend DeepSeek credit on a web search.
+ * with an HTML scrape of the same endpoint as a fallback. The mainland-China
+ * host (`cn.bing.com`) is tried first and `www.bing.com` second: this runs on a
+ * mainland network where the international host is the less reliable of the
+ * two, and the overseas host is still reached when a proxy is in play. No API
+ * key, no account, and no DeepSeek credential is ever consulted, so a
+ * conversation that selects this provider can never spend DeepSeek credit on a
+ * web search.
  *
  * Contract implemented (see `@deepseek-ai/dsh-web`):
  *   `{ id, available(), search(request, signal) }`

@@ -2,6 +2,9 @@
 
 给 DeepSeek Harness 的 web 能力 seam（`ctx.web`）用的**免密钥 Bing 搜索 provider**。
 
+> **国内优先**：默认先打 `cn.bing.com`（国内直连，不需要代理），连不上或没结果才回退
+> `www.bing.com`（国际站，国内通常要走代理才稳）。挂代理、出国、换网络都不用改配置。
+
 ## 为什么有这个东西
 
 DSH 的 base bundle 把联网搜索固定成了 DeepSeek 官方：
@@ -35,12 +38,14 @@ DeepSeek 额度照样被扣。这个插件把搜索后端换成 Bing 的公开�
 | `available()` | 本地检查（至少一个候选 URL 合法、超时为正），**不看任何凭据** |
 | `search({query,maxResults})` | 依次尝试候选主机 × 传输方式，返回 `{sources:[{url,title,snippet,publishedAt}],truncated:false}` |
 
-尝试顺序（第一个产出非空结果的就返回）：
+尝试顺序（**第一个产出非空结果的就返回**，所以国内网络下第一步就命中）：
 
-1. `baseURL`（默认 `https://www.bing.com/search`）+ `format=rss` —— 免 API key、免登录、国内可直连，实测 ~0.8s / 10 条
-2. 同一主机的 HTML 结果页（解析 `li.b_algo`）
-3. `fallbackBaseURL`（默认 `https://cn.bing.com/search`）+ RSS
-4. 备用主机的 HTML 结果页
+| 顺序 | 主机 | 传输 | 说明 |
+|---|---|---|---|
+| 1 | `cn.bing.com` | RSS（`format=rss`） | **默认首选**——国内直连，免 key、免登录，实测 ~0.8s / 10 条 |
+| 2 | `cn.bing.com` | 结果页 HTML（解析 `li.b_algo`） | RSS 挂了或没条目时兜底 |
+| 3 | `www.bing.com` | RSS | 前两步都失败时才走国际站 |
+| 4 | `www.bing.com` | 结果页 HTML | 最后一道 |
 
 其他行为：
 
@@ -64,7 +69,8 @@ DeepSeek 额度照样被扣。这个插件把搜索后端换成 Bing 的公开�
 这样 pnpm 在 profile 里做任何 install 都会保留它；包通过 `node_modules` 里的链接解析到本仓库。
 
 **兜底（`install.ps1`）**：如果那一行被插件市场重写掉了、或者链接被删了，
-`.\install.ps1` 用目录联接（junction）直接把本目录挂回 profile 的 `node_modules`，幂等可重跑。
+`.\install.ps1` 用目录联接（junction）直接把本目录挂回 profile 的 `node_modules`，幂等可重跑，
+并会顺带报告 `package.json` 里的声明还在不在。
 
 **然后**在 profile 的 `cordis.patch.yml` 里注册 provider 并指向它：
 
@@ -73,8 +79,8 @@ DeepSeek 额度照样被扣。这个插件把搜索后端换成 Bing 的公开�
     - id: web-search-bing
       name: dsh-web-search-bing
       config:
-        baseURL: https://www.bing.com/search
-        fallbackBaseURL: https://cn.bing.com/search
+        baseURL: https://cn.bing.com/search          # 国内优先
+        fallbackBaseURL: https://www.bing.com/search # 国际站兜底
         market: zh-CN
         count: 10
         timeoutMs: 20000
@@ -91,12 +97,14 @@ DeepSeek 额度照样被扣。这个插件把搜索后端换成 Bing 的公开�
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
-| `baseURL` | `https://www.bing.com/search` | 首选搜索端点 |
-| `fallbackBaseURL` | `https://cn.bing.com/search` | 备用主机；设成空串可关掉回退 |
+| `baseURL` | `https://cn.bing.com/search` | **首选端点（国内）** |
+| `fallbackBaseURL` | `https://www.bing.com/search` | 备用端点（国际）；设成空串可关掉回退，只用一个主机 |
 | `market` | `zh-CN` | 传给 Bing 的 `mkt` |
 | `count` | `10` | 请求条数（会被 `maxResults` 抬高，上限 50） |
 | `timeoutMs` | `20000` | 单次请求超时 |
 | `userAgent` | Chrome/Win64 UA | 请求头 |
+
+想让国际站优先（例如长期挂代理），把两个字段的值对调即可。
 
 ## 验证
 
