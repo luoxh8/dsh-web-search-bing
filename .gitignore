@@ -1,0 +1,5 @@
+# Runtime and editor artefacts; the package itself ships no build output.
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
