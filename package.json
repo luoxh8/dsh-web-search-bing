@@ -7,7 +7,8 @@
   "main": "index.js",
   "exports": {
     ".": "./index.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
   },
   "engines": {
     "node": ">=20.0.0"
@@ -17,6 +18,11 @@
     "deepseek-harness",
     "web-search",
     "bing"
+  ],
+  "files": [
+    "index.js",
+    "locale",
+    "README.md"
   ],
   "license": "MIT"
 }

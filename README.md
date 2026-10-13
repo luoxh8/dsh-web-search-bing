@@ -55,6 +55,15 @@ DeepSeek 额度照样被扣。这个插件把搜索后端换成 Bing 的公开�
 - 全部尝试都失败时抛带 `code` 的 `WebError`（`WEB_PROVIDER_ERROR`，取消是 `WEB_ABORTED`）。
 - 无第三方依赖；`@deepseek-ai/dsh-web` 只用来取 `WebError` 类，取不到就退回带 `code` 的原生 `Error`。
 
+## 在插件管理页看到的描述
+
+插件管理页（侧栏 **插件**）显示的标题与描述来自 `locale/zh.json` 与 `locale/en.json`
+的 `meta.title` / `meta.description`，由 DSH 的 `readPluginMeta()` 通过 Node
+`exports` 读取（所以 `package.json` 里有 `"./locale/*.json": "./locale/*.json"`）。
+缺少这两个字段时才回退到 `package.json` 的 `description`——那行是英文、且面向
+npm 索引而非界面，所以界面文案一律写在 locale 文件里。`en.json` 必须有：
+它同时是其他语言的英文兜底。
+
 ## 安装
 
 **依赖声明（推荐，一次做完）**：在 DSH profile 的 `package.json` 里加一行
