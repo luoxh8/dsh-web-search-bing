@@ -3,7 +3,7 @@
  * portable Node (`node test/search.test.mjs`). They exercise the real seam
  * contract against the live Bing endpoint plus the pure parsers offline.
  */
-import { apply, parseRss, parseHtml, BingSearchProvider } from '../index.js';
+import { apply, parseRss, parseHtml, nextPageUrl, BingSearchProvider } from '../index.js';
 
 let failures = 0;
 
@@ -82,6 +82,18 @@ const html = parseHtml(
 check('html parser extracts anchors', html.length === 2, String(html.length));
 check('html parser decodes titles', html[0]?.title === 'Example & Co', html[0]?.title);
 check('html parser keeps snippets optional', html[1]?.snippet === undefined);
+
+const paged = nextPageUrl(
+  '<a href="/search?q=x&amp;FPIG=abc&amp;first=11&amp;FORM=PERE">next</a>' +
+    '<a href="/search?q=x&amp;FPIG=abc&amp;first=21&amp;FORM=PERE1">more</a>',
+  'https://cn.bing.com/search?q=x',
+);
+check('paging helper takes the nearest continuation', String(paged).includes('first=11') && String(paged).includes('FPIG=abc'), String(paged));
+check('paging helper resolves against the served host', String(paged).startsWith('https://cn.bing.com/search'), String(paged));
+check(
+  'paging helper stops when the page offers no later offset',
+  nextPageUrl('<a href="/search?q=x&first=1">first</a>', 'https://cn.bing.com/search?q=x&first=11') === undefined,
+);
 
 const failing = new BingSearchProvider(() => ({
   baseURL: 'https://bing.invalid.example/search',

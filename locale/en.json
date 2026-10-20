@@ -1,6 +1,1 @@
-{
-  "meta": {
-    "title": "Bing Web Search",
-    "description": "Switches DSH web search from the DeepSeek official backend to Bing's public endpoints. Every web_search used to be a standalone DeepSeek model request billed against DEEPSEEK_API_KEY, no matter which chat model was selected, so this cuts that billing path entirely: searching stops costing money and stops consuming the chat model's context budget. Keyless, direct from mainland China via cn.bing.com, ~0.8s for 10 results."
-  }
-}
+{"meta":{"title":"Bing Web Search","description":"Switches DSH web search from the DeepSeek official backend to Bing public endpoints, because the official search costs money: every web_search is a standalone DeepSeek model request billed against DEEPSEEK_API_KEY regardless of the selected chat model, so this cuts that billing path entirely (keyless, no login). International www.bing.com is tried first with cn.bing.com as fallback; the per-call row count is bounded by Bing and by the DSH tool cap (~8-10 measured)."}}

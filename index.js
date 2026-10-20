@@ -28,6 +28,9 @@ const DEFAULT_BASE_URL = 'https://www.bing.com/search';
 const DEFAULT_FALLBACK_BASE_URL = 'https://cn.bing.com/search';
 const DEFAULT_MARKET = 'zh-CN';
 const DEFAULT_COUNT = 10;
+const DEFAULT_PAGES = 5;
+const MAX_PAGES_LIMIT = 10;
+const MAX_RESULTS_LIMIT = 50;
 const DEFAULT_TIMEOUT_MS = 20000;
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
@@ -188,11 +191,17 @@ class BingSearchProvider {
   }
 
   /**
-   * Search every candidate host with every transport, and return the first
-   * transport that yields at least one source. A host that answers with an
-   * empty result set is treated as a failed attempt, not as an empty answer:
-   * Bing's RSS endpoint returns a well-formed but item-less document when it
-   * throttles, and reporting that as "no results" would hide the failure.
+   * Search every candidate host with every transport, walking continuation pages
+   * until the requested number of sources is reached (or the upstream stops
+   * offering more). A host that answers with an empty result set is treated as a
+   * failed attempt, not as an empty answer: Bing's RSS endpoint returns a
+   * well-formed but item-less document when it throttles, and reporting that as
+   * "no results" would hide the failure.
+   *
+   * Measured 2026-10-21 on a mainland network: Bing's CN endpoint returns only
+   * ~8-10 rows per query and ignores `first`/`count`, so a target above that can
+   * stay unmet even though every page is fetched. The loop still pays off on
+   * networks where pagination is honoured, and it never invents rows.
    */
   async search(request, signal) {
     const options = this.resolveOptions();
@@ -208,33 +217,64 @@ class BingSearchProvider {
     }
 
     const requested = Number.isInteger(request?.maxResults) && request.maxResults > 0 ? request.maxResults : 0;
-    const count = Math.min(Math.max(requested, options.count), 50);
+    const target = Math.min(Math.max(requested, options.count), MAX_RESULTS_LIMIT);
     const attempts = [];
+    let best = [];
 
     for (const baseURL of hosts) {
+      const collected = [];
+      const seen = new Set();
       for (const transport of TRANSPORTS) {
-        try {
-          const sources = await this.#request(baseURL, options, query, count, transport, signal);
-          if (sources.length > 0) return { sources, truncated: false };
-          attempts.push(`${baseURL} [${transport}]: no results`);
-        } catch (error) {
-          if (error?.code === 'WEB_ABORTED') throw error;
-          attempts.push(`${baseURL} [${transport}]: ${error?.message ?? String(error)}`);
+        let url = this.#buildUrl(baseURL, options, query, target, transport);
+        for (let page = 0; page < options.pages && url !== undefined && collected.length < target; page += 1) {
+          try {
+            const result = await this.#fetchPage(url, options, transport, signal);
+            if (result.sources.length === 0) {
+              if (page === 0) attempts.push(`${baseURL} [${transport}]: no results`);
+              break;
+            }
+            let added = 0;
+            for (const source of result.sources) {
+              if (seen.has(source.url)) continue;
+              seen.add(source.url);
+              collected.push(source);
+              added += 1;
+              if (collected.length >= target) break;
+            }
+            if (added === 0) break;
+            url = transport === 'html' ? nextPageUrl(result.body, result.url) : undefined;
+          } catch (error) {
+            if (error?.code === 'WEB_ABORTED') throw error;
+            attempts.push(`${baseURL} [${transport}]: ${error?.message ?? String(error)}`);
+            break;
+          }
         }
+        if (collected.length >= target) break;
       }
+      if (collected.length > best.length) best = collected;
+      if (best.length >= target) break;
     }
 
-    throw webError(`Bing search returned nothing usable. Attempts -> ${attempts.join(' | ')}`, 'WEB_PROVIDER_ERROR');
+    if (best.length === 0) {
+      throw webError(`Bing search returned nothing usable. Attempts -> ${attempts.join(' | ')}`, 'WEB_PROVIDER_ERROR');
+    }
+    // Nothing was silently dropped: when the upstream simply has fewer rows than
+    // asked for, `truncated` stays false and the caller sees the honest count.
+    return { sources: best, truncated: false };
   }
 
-  /** One HTTP round-trip against one candidate host. */
-  async #request(baseURL, options, query, count, transport, signal) {
+  /** Build the first-page URL for one host/transport. */
+  #buildUrl(baseURL, options, query, count, transport) {
     const url = new URL(baseURL);
     url.searchParams.set('q', query);
     url.searchParams.set('count', String(count));
     if (options.market.length > 0) url.searchParams.set('mkt', options.market);
     if (transport === 'rss') url.searchParams.set('format', 'rss');
+    return url;
+  }
 
+  /** One HTTP round-trip: parsed sources plus the raw body, for paging links. */
+  async #fetchPage(url, options, transport, signal) {
     const timeout = AbortSignal.timeout(options.timeoutMs);
     const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
     const label = transport.toUpperCase();
@@ -269,7 +309,34 @@ class BingSearchProvider {
       throw requestError(`Bing ${label} response body could not be read: ${String(error)}`, error);
     }
 
-    return transport === 'rss' ? parseRss(body) : parseHtml(body);
+    return {
+      body,
+      url: response.url.length > 0 ? response.url : url.toString(),
+      sources: transport === 'rss' ? parseRss(body) : parseHtml(body),
+    };
+  }
+}
+
+/**
+ * The next-page URL a Bing result page links to, or undefined when the page has
+ * none. Only the page's own href is reliable: it carries the FPIG session token
+ * Bing requires, while a hand-built `first=` query is ignored. Pure, so it is
+ * unit-testable offline.
+ */
+function nextPageUrl(body, currentUrl) {
+  const current = Number(/[?&]first=(\d+)/.exec(String(currentUrl))?.[1] ?? 1);
+  let best;
+  for (const match of String(body).matchAll(/href="([^"]*)"/gi)) {
+    const href = match[1].replace(/&amp;/g, '&');
+    const first = Number(/[?&]first=(\d+)/.exec(href)?.[1]);
+    if (!Number.isInteger(first) || first <= current) continue;
+    if (best === undefined || first < best.first) best = { first, href };
+  }
+  if (best === undefined) return undefined;
+  try {
+    return new URL(best.href, currentUrl).toString();
+  } catch {
+    return undefined;
   }
 }
 
@@ -288,6 +355,7 @@ function resolveOptions(config) {
           : '',
     market: typeof settings.market === 'string' ? settings.market : DEFAULT_MARKET,
     count: toPositive(settings.count, DEFAULT_COUNT),
+    pages: Math.min(toPositive(settings.pages, DEFAULT_PAGES), MAX_PAGES_LIMIT),
     timeoutMs: toPositive(settings.timeoutMs, DEFAULT_TIMEOUT_MS),
     userAgent: toString(settings.userAgent, DEFAULT_USER_AGENT),
   };
@@ -299,4 +367,12 @@ export function apply(ctx, config = {}) {
   ctx.web.registerSearchProvider(new BingSearchProvider(() => snapshot));
 }
 
-export { BingSearchProvider, parseRss, parseHtml, DEFAULT_BASE_URL, DEFAULT_FALLBACK_BASE_URL, DEFAULT_MARKET };
+export {
+  BingSearchProvider,
+  parseRss,
+  parseHtml,
+  nextPageUrl,
+  DEFAULT_BASE_URL,
+  DEFAULT_FALLBACK_BASE_URL,
+  DEFAULT_MARKET,
+};

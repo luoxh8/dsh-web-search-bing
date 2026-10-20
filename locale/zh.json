@@ -1,6 +1,1 @@
-{
-  "meta": {
-    "title": "Bing 联网搜索",
-    "description": "把 DSH 的联网搜索从 DeepSeek 官方后端切到 Bing 公开接口。原本每次 web_search 都是一次独立的 DeepSeek 模型请求、直接扣 DEEPSEEK_API_KEY 的额度，而且跟在模型选择器里选的聊天模型无关——换插件后这条计费路径被彻底切断：搜索不再花钱，也不再占用聊天模型的上下文预算。国内 cn.bing.com 直连、免密钥免登录，约 0.8s 返回 10 条结果。"
-  }
-}
+{"meta":{"title":"Bing 联网搜索","description":"把 DSH 的联网搜索从 DeepSeek 官方后端切到 Bing 公开接口——因为官方搜索要花钱：每次 web_search 都是一次独立的 DeepSeek 模型请求、直接扣 DEEPSEEK_API_KEY 的额度，跟聊天里选哪个模型无关。换插件后这条计费路径被彻底切断，免密钥、免登录。默认国际版（www.bing.com）优先、cn.bing.com 兜底；单次返回条数受 Bing 上游与 DSH 工具上限约束（实测约 8-10 条）。"}}

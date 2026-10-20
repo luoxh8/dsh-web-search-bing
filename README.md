@@ -2,8 +2,12 @@
 
 给 DeepSeek Harness 的 web 能力 seam（`ctx.web`）用的**免密钥 Bing 搜索 provider**。
 
-> **国内优先**：默认先打 `cn.bing.com`（国内直连，不需要代理），连不上或没结果才回退
-> `www.bing.com`（国际站，国内通常要走代理才稳）。挂代理、出国、换网络都不用改配置。
+> **为什么需要它：DSH 默认的联网搜索要花钱**——`searchProvider: deepseek-official` 每搜一次都是一次
+> 付费的 DeepSeek 请求（按额度扣费，与聊天用哪个模型无关）。这个插件把搜索换成 Bing 的公开接口，
+> **免密钥、不计费**，失败时报错也不回退到付费后端。
+
+> **国际版优先**：默认先打 `www.bing.com`，连不上或没结果才回退 `cn.bing.com`。
+> 注意 `www` 在部分网络会被上游 302 到 `cn.bing.com`，那是 Bing 的按 IP 分流，不是配置问题。
 
 ## 为什么有这个东西
 
@@ -88,10 +92,11 @@ npm 索引而非界面，所以界面文案一律写在 locale 文件里。`en.j
     - id: web-search-bing
       name: dsh-web-search-bing
       config:
-        baseURL: https://cn.bing.com/search          # 国内优先
-        fallbackBaseURL: https://www.bing.com/search # 国际站兜底
+        baseURL: https://www.bing.com/search        # 国际版优先（2026-10-21 起的默认）
+        fallbackBaseURL: https://cn.bing.com/search # 国内站兜底
         market: zh-CN
-        count: 10
+        count: 20        # 目标条数：不足时自动翻续页
+        pages: 5         # 最多翻几页
         timeoutMs: 20000
 - id: web
   name: "@deepseek-ai/dsh-web"
@@ -106,19 +111,20 @@ npm 索引而非界面，所以界面文案一律写在 locale 文件里。`en.j
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
-| `baseURL` | `https://cn.bing.com/search` | **首选端点（国内）** |
-| `fallbackBaseURL` | `https://www.bing.com/search` | 备用端点（国际）；设成空串可关掉回退，只用一个主机 |
+| `baseURL` | `https://www.bing.com/search` | **首选端点（国际版）**；`www` 在部分网络会被 302 到 `cn.bing.com`，这是上游行为 |
+| `fallbackBaseURL` | `https://cn.bing.com/search` | 备用端点；设成空串可关掉回退，只用一个主机 |
 | `market` | `zh-CN` | 传给 Bing 的 `mkt` |
-| `count` | `10` | 请求条数（会被 `maxResults` 抬高，上限 50） |
+| `count` | `10` | 目标条数（会被 `maxResults` 抬高，上限 50） |
+| `pages` | `5` | 最多翻几页续页（1–10）；翻页只沿结果页自己给出的 `first=` 链接走，因为手拼 `first=` 会被无视 |
 | `timeoutMs` | `20000` | 单次请求超时 |
 | `userAgent` | Chrome/Win64 UA | 请求头 |
 
-想让国际站优先（例如长期挂代理），把两个字段的值对调即可。
+想让国内站优先（例如网络到国际站更差），把前两个字段的值对调即可。
 
 ## 验证
 
 ```powershell
-# 18 项：真打 Bing + 回退链路 + 两个解析器的离线用例
+# 21 项：真打 Bing + 回退链路 + 分页链接 + 两个解析器的离线用例
 node test\search.test.mjs
 ```
 
@@ -136,7 +142,12 @@ node test\search.test.mjs
 
 - 依赖 Bing 私有端点（RSS 与结果页 HTML），上游改版可能使其失效；失效时报
   `WEB_PROVIDER_ERROR`，**不会**回退到 DeepSeek——这是刻意的，宁可搜索失败也不偷偷计费。
-- Bing RSS 结果质量弱于专用搜索 API（长查询匹配差、约 10 条上限）。
+- Bing RSS 结果质量弱于专用搜索 API（长查询匹配差）。
+- **实测上限（2026-10-21，大陆网络）**：`www.bing.com` 会 302 到 `cn.bing.com`；该端点每次只给
+  **8–10 条**，并且**无视 `first` / `count` / `mkt` / 日期筛选**（续页链接返回同一批结果，连同 Cookie
+  回放也一样），`ensearch=1` 只是同一批结果的一个子集。所以 `count: 20` 在这条网络上拿不到 20 条；
+  翻页代码是为"上游真给多页"的网络准备的，且**绝不编造结果**。另外 DSH 的 `web_search` 工具
+  自身还有 `searchMaxResults`（默认 8）的截断，属于 preset 内建，不在本插件控制范围。
 - 无搜索深度、时间范围、站点过滤等参数——seam 的请求类型本身只有 `query` 与 `maxResults`。
 
 ## 许可
